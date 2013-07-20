@@ -28,9 +28,20 @@ class backup:
 # Create/remove a schedule, get schedule information
 class schedule:
     def __init__(self):
+        self.updateTime()
+        self.updateSchedules()
+        
+    def updateTime(self):
+        # Get the date and time and store it
+        self.now = str(datetime.datetime.now()).split(' ')
+        self.year, self.month, self.day = self.now[0].split('-')
+        self.hours, self.minutes, self.seconds = self.now[1].split(':')
+        self.hours, self.minutes = int(self.hours), int(self.minutes)
+
+    # Update schedules
+    def updateSchedules(self):
         # Get database and put it in lists
         self.schedule, self.queue, self.running = self.listSchedule()
-        
         # Get busy hosts and ids and schedules
         self.busyhosts = []
         self.busyids = []
@@ -46,7 +57,6 @@ class schedule:
                         self.busyhosts.append(item[4])
                     if item[5] not in self.busyhosts:
                         self.busyhosts.append(item[5])
-        
         # Get free hosts and ids and schedules
         self.freehosts = []
         self.freeids = []
@@ -60,7 +70,6 @@ class schedule:
                 self.freehosts.append(item[4])
             if item[5] not in self.busyhosts:
                 self.freehosts.append(item[5])
-
         # Get queue hosts and ids and schedules
         self.queuehosts = []
         self.queueids = []
@@ -77,12 +86,7 @@ class schedule:
                     if item[5] not in self.queuehosts:
                         self.queuehosts.append(item[5])
         
-        
-        # Get the date and time and store it
-        self.now = str(datetime.datetime.now()).split(' ')
-        self.year, self.month, self.day = self.now[0].split('-')
-        self.hours, self.minutes, self.seconds = self.now[1].split(':')
-        self.hours, self.minutes = int(self.hours), int(self.minutes)
+    # Update time
     
     # When you print object
     def __str__(self):
@@ -251,6 +255,23 @@ class schedule:
         finally:
             if con:
                 con.close()
+    
+    # Delete a single run
+    def removeRunning(self, scheduleid):
+        print 'Deleting scheduleid = ' + scheduleid + ' from running'
+        try:
+            con = lite.connect('schedule.db')
+            cur = con.cursor()
+            cur.execute('DELETE FROM Running WHERE scheduleid = ?', (scheduleid))
+            con.commit()
+        except lite.Error, e:
+            if con:
+                con.rollback()
+            print 'Error: ' + e.args[0]
+            exit()
+        finally:
+            if con:
+                con.close()
 
     # Add a new running instance and make sure one isn't already running
     def newRunning(self, scheduleid):
@@ -281,32 +302,41 @@ class schedule:
     def startBackup(self):
         hosts = []
         try:
-            con = lite.connect('schedule.db')
-            cur = con.cursor()
-            cur.execute('select * from schedule where id in (select scheduleid from queue)')
-            queues = cur.fetchall()
-            con.close()
-            print "Printing queues"
-            print queues
+            #con = lite.connect('schedule.db')
+            #cur = con.cursor()
+            #cur.execute('select * from schedule where id in (select scheduleid from queue)')
+            #queues = cur.fetchall()
+            #con.close()
+            #print "Printing queues"
+            #print queues
             # Nothing found in queue list
-            if not queues:
-                print "no queues found"
+            #if not queues:
+            #    print "no queues found"
+            #    return False
+            if not self.queueschedules:
                 return False
-            for row in queues:
+            for row in self.queueschedules:
                 print "Printing row"
                 print row
                 print row[0]
                 # Check if this backup is already running
-                for run in self.running:
-                    if row[0] == run[0]:
-                        print "Don't add this"
-                        continue
+                if row in self.busyschedules:
+                    print "Found a busy schedule"
+                    continue
+                print row[4], row[5]
+                if row[4] in self.busyhosts or row[5] in self.busyhosts:
+                    print "Found busy host"
+                    continue
+                #for run in self.running:
+                #    if row[0] == run[0]:
+                #        print "Don't add this"
+                #        continue
                 # Check if host is already participating in a backup
-                con = lite.connect('schedule.db')
-                cur = con.cursor()
-                cur.execute('select source_host, dest_host from schedule where id in (select scheduleid from running)')
-                queues = cur.fetchall()
-                con.close()
+                #con = lite.connect('schedule.db')
+                #cur = con.cursor()
+                #cur.execute('select source_host, dest_host from schedule where id in (select scheduleid from running)')
+                #queues = cur.fetchall()
+                #con.close()
                 #for host in self
                 hosts.append(row[4])
                 hosts.append(row[5])
@@ -315,15 +345,15 @@ class schedule:
                 print "Adding row " + str(row[0])
                 self.newRunning(str(row[0]))
                 # Start the backup here 
-            con.commit()
+            #con.commit()
         except lite.Error, e:
-            if con:
-                con.rollback()
+            #if con:
+                #con.rollback()
                 print 'Error: ' + e.args[0]
                 exit()
         finally:
-            if con:
-                con.close()
+            #if con:
+                #con.close()
             return True 
         
 def main():
@@ -333,6 +363,7 @@ def main():
     parser.add_option('-a', '--add',    help='Add new schedule at specific time', dest='add', default=False, action='store_true')
     parser.add_option('-r', '--remove',    help='Remove existing schedule', dest='remove', default=False, action='store_true')
     parser.add_option('--remove-queue',    help='Remove existing schedule from queue', dest='removequeue', default=False, action='store_true')
+    parser.add_option('--remove-run',    help='Remove existing schedule from running', dest='removerun', default=False, action='store_true')
     parser.add_option('--add-queue',    help='Add a single schedule to queue', dest='addqueue', default=False, action='store_true')
     parser.add_option('-s', '--show',    help='Show the schedule and host info', dest='show', default=False, action='store_true')
     parser.add_option('-q', '--queue',    help='Search and add expired schedules to queue', dest='queue', default=False, action='store_true')
@@ -371,6 +402,10 @@ def main():
         print "Option remove requires option sid"
         parser.print_help()
         exit(-1)
+    if opts.removerun and not opts.sid:
+        print "Option remove-run requires option sid"
+        parser.print_help()
+        exit(-1)
     if opts.removequeue and not opts.sid:
         print "Option remove-queue requires option sid"
         parser.print_help()
@@ -400,6 +435,8 @@ def main():
         scheduler.newSchedule(time, backuptype, sourcehost, desthost, sourcedir, destdir)
     elif opts.remove: # Removes a single schedule from the schedules, removes all instances from queue and running
         scheduler.removeSchedule(scheduleid)
+    elif opts.removerun: # Removes a single schedule from the queue
+        scheduler.removeRunning(scheduleid)
     elif opts.removequeue: # Removes a single schedule from the queue
         scheduler.removeQueue(scheduleid)
     elif opts.addqueue: # Adds a single schedule to queue 
