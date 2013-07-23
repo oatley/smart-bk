@@ -8,12 +8,7 @@ import optparse
 import pysftp
 import sys
 import urllib2
-import getpass
-import crypt
-import random
-import re
 import string
-import subprocess
 import os
 import sqlite3 as lite
 
@@ -21,6 +16,7 @@ import sqlite3 as lite
 class schedule:
     def __init__(self):
         self.backupuser = 'backup'
+        self.logdir = '/home/' + self.backupuser + '/logs/'
         self.updateTime()
         self.updateSchedules()
 
@@ -376,7 +372,7 @@ class schedule:
         if len(str(self.minutes)) == 1:
             self.minutes = '0' + str(self.minutes)
         try:
-            log = open('/home/' + self.backupuser + '/logs/smartbk-' + str(self.year) + '-' + str(self.month) + '-' + str(self.day) + '-' + str(self.hours) + '-' + str(self.minutes) + '.log', 'a+')
+            log = open(self.logdir + 'smartbk-' + str(self.year) + '-' + str(self.month) + '-' + str(self.day) + '-' + str(self.hours) + '-' + str(self.minutes) + '.log', 'a+')
             log.write(str(output)+'\n')
         except Exception, e:
             print "Error: " + str(e)
@@ -433,7 +429,8 @@ depending on the number of schedules."""
     parser.add_option('--dest-host',    help='specify the destination backup host', dest='desthost', default=False, action='store', metavar="host")
     parser.add_option('--source-dir',    help='specify the source backup dir', dest='sourcedir', default=False, action='store', metavar="dir")
     parser.add_option('--dest-dir',    help='specify the destination backup dir', dest='destdir', default=False, action='store', metavar="dir")
-    parser.add_option('--backup-user',    help='specify the user to perform backups', dest='backupuser', default=False, action='store', metavar="dir")
+    parser.add_option('--backup-user',    help='specify the user to perform backups', dest='backupuser', default=False, action='store', metavar="user")
+    parser.add_option('--log-dir',    help='specify the directory to save logs', dest='logdir', default=False, action='store', metavar="dir")
     (opts, args) = parser.parse_args()
     
     # No options entered
@@ -493,6 +490,8 @@ depending on the number of schedules."""
     scheduler = schedule()
     if opts.backupuser:
         scheduler.backupuser = opts.backupuser
+    if opts.logdir:
+        scheduler.logdir = opts.logdir
     if opts.show: # Displays pretty output of schedule, queue, and running tables
         scheduler = schedule()
         print scheduler
@@ -513,7 +512,6 @@ depending on the number of schedules."""
     elif opts.queue: # Searches and add all schedules not run today to queue, then moves them to running
         scheduler.queueSchedules()
         scheduler.startBackup()
-
 
 
 
