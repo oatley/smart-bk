@@ -82,13 +82,13 @@ class schedule:
         return self.prettySchedule()
     
     # Create a new schedule
-    def newSchedule(self, time, backuptype, sourcehost, desthost, sourcedir, destdir):
-        output = self.day, time, backuptype, sourcehost, desthost, sourcedir, destdir
+    def newSchedule(self, time, backuptype, sourcehost, desthost, sourcedir, destdir, sourceuser, destuser):
+        output = self.day, time, backuptype, sourcehost, desthost, sourcedir, destdir, sourceuser, destuser
         self.writeLog(output)
         try:
             con = lite.connect('schedule.db')
             cur = con.cursor()
-            cur.execute('INSERT INTO Schedule(day, time, type, source_host, dest_host, source_dir, dest_dir) VALUES(?, ?, ?, ?, ?, ?, ?)', (self.day, time, backuptype, sourcehost, desthost, sourcedir, destdir))
+            cur.execute('INSERT INTO Schedule(day, time, type, source_host, dest_host, source_dir, dest_dir, source_user, dest_user) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)', (self.day, time, backuptype, sourcehost, desthost, sourcedir, destdir, sourceuser, destuser))
             con.commit()
             con.close()
         except lite.Error, e:
@@ -131,8 +131,8 @@ class schedule:
                 case = cur.execute('SELECT * FROM Schedule')
                 rows = cur.fetchall()
                 for row in rows:
-                    # id, day, time, type, sourcehost, desthost, sourcedir, destdir
-                    schedule.append([row[0], row[1].strip(), row[2].strip(), row[3].strip(), row[4].strip(), row[5].strip(), row[6].strip(), row[7].strip()])
+                    # id, day, time, type, sourcehost, desthost, sourcedir, destdir, sourceuser, destuser
+                    schedule.append([row[0], row[1].strip(), row[2].strip(), row[3].strip(), row[4].strip(), row[5].strip(), row[6].strip(), row[7].strip(), row[8].strip(), row[9].strip()])
                 case = cur.execute('SELECT * FROM Queue')
                 rows = cur.fetchall()
                 for row in rows:
@@ -157,10 +157,10 @@ class schedule:
         # Schedule
         print "\n\t" * 10 + "-[Schedule]-"
         print "-" * 100
-        print "id" + "|" + "day" + "|" + "time" + "|" + "type" + "|" + "source host" + "|" + "dest host" + "|" + "source dir" + "|" + "dest dir" 
+        print "id" + "|" + "day" + "|" + "time" + "|" + "type" + "|" + "source host" + "|" + "dest host" + "|" + "source dir" + "|" + "dest dir" + "|" + "source user" + "|" + "dest user"
         print "-" * 100
         for item in self.schedule:
-            print str(item[0]) + "|" + item[1] + "|" + item[2] + "|" + item[3] + "|" + item[4] + "|" + item[5] + "|" + item[6] + "|" + item[7] 
+            print str(item[0]) + "|" + item[1] + "|" + item[2] + "|" + item[3] + "|" + item[4] + "|" + item[5] + "|" + item[6] + "|" + item[7] + "|" + item[8] + "|" + item[9]
         print "-" * 100
         # Queue
         print "\n" * 10 + "-[Queue]-"
@@ -336,6 +336,8 @@ class schedule:
             self.desthost = row[5]
             self.sourcedir = row[6]
             self.destdir = row[7]
+            self.sourceuser = row[8]
+            self.destuser = row[9]
             # Check if this backup is already running
             if row in self.busyschedules:
                 output = 'Busy scheduleid = ' + self.scheduleid + ' already running'
@@ -346,12 +348,12 @@ class schedule:
                 self.writeLog(output)
                 continue
             # Check hosts for connectivity
-            if not connectHost(self.sourcehost):
-                output = 'Unavailable host = ' + self.sourcehost + ' no connection'
+            if not connectHost(self.sourcehost, self.sourceuser):
+                output = 'Unavailable host = ' + self.sourcehost + 'user = ' + self.sourceuser + ' no connection'
                 self.writeLog(output)
                 continue
-            if not connectHost(self.desthost):
-                output = 'Unavailable host = ' + self.desthost + ' no connection'
+            if not connectHost(self.desthost, self.destuser):
+                output = 'Unavailable host = ' + self.desthost + ' user = ' + self.destuser + ' no connection'
                 self.writeLog(output)
                 continue
             hosts.append(self.hostsource)
@@ -359,11 +361,13 @@ class schedule:
             self.removeQueue(self.scheduleid)
             self.newRunning(self.scheduleid)
             # Start the backup here 
+            if self.backuptype == 'rsync':
+                self.performRsync()
+            elif self.backuptype == 'dbdump':
+                self.performDbdump()
             # Finish backup here
             self.removeRunning(self.scheduleid)
         return True 
-    
-    # Check all hosts in the schedule for connection issues
     
     # Log everything
     def writeLog(self, output):
@@ -372,7 +376,7 @@ class schedule:
         if len(str(self.minutes)) == 1:
             self.minutes = '0' + str(self.minutes)
         try:
-            log = open(self.logdir + 'smartbk-' + str(self.year) + '-' + str(self.month) + '-' + str(self.day) + '-' + str(self.hours) + '-' + str(self.minutes) + '.log', 'a+')
+            log = open(self.logdir + 'smart-bk-' + str(self.year) + '-' + str(self.month) + '-' + str(self.day) + '-' + str(self.hours) + '-' + str(self.minutes) + '.log', 'a+')
             log.write(str(output)+'\n')
         except Exception, e:
             print "Error: " + str(e)
@@ -383,10 +387,10 @@ class schedule:
              
 
     # Connect to the hosts, return True if success or False if not successful
-    def connectHost(self, host):
+    def connectHost(self, host, user):
         try:
             response=urllib2.urlopen('http://'+host,timeout=1)
-            srv = pysftp.Connection(host=host, username=self.backupuser, log=True)
+            srv = pysftp.Connection(host=host, username=user, log=True)
             srv.close()
             return True
         except urllib2.URLError as err:pass
@@ -396,16 +400,56 @@ class schedule:
 
     # Backup is complete, clean, log, and email results
     def performRsync(self):
-        srv = pysftp.Connection(host=self.sourcehost, username="backup", log=True)
-        output = srv.execute('rsync -aHAXEvz --exclude "lost+found" ' + self.backupuser + '@' + self.sourcehost + ':' + self.sourcedir + self.backupuser + '@' + self.desthost + ':' + self.destdir)
-        self.writeLog(output)
-        srv.close()
+        output = ""
+        srv = ""
+        try:
+            srv = pysftp.Connection(host=self.sourcehost, username=self.sourceuser, log=True)
+            output = srv.execute('rsync -aHAXEvz --exclude "lost+found" ' + self.sourcedir + ' ' + self.backupuser + '@' + self.desthost + ':' + self.destdir + ';echo $?')
+            if output[-1] != '0':
+                error = 'Error: command returned a non-zero exit status'
+                self.writeLog(error)
+            self.writeLog(output)
+            srv.close()
+        except Exception, e:
+            if output:
+                self.writeLog(output)
+            output = "Error: " + str(e)
+            self.writeLog(output)
+            pass
+        finally:
+            if srv:
+                srv.close()
+        return True
 
+    # Perform a dbdump on koji... Should probably change this to support a custom db name
     def performDbdump(self):
-        print "Start dbdump"
+        kojifile = '/tmp/kojidb-' + str(self.year) + '-' + str(self.month) + '-' + str(self.day) + '-' + str(self.hours) + '-' + str(self.minutes) + '-' + str(self.seconds) + '.sql'
+        output = ""
+        srv = ""
+        try:
+            srv = pysftp.Connection(host=self.sourcehost, username=self.sourceuser, log=True)
+            output = srv.execute('pg_dump koji > ' + kojifile + ';echo $?')
+            if output[-1] != '0':
+                error = 'Error: command returned a non-zero exit status'
+                self.writeLog(error)
+            output = srv.execute('scp ' + kojifile + ' ' + self.destuser + '@' + self.desthost + ':' + self.destdir + ';echo $?')
+            if output[-1] != '0':
+                error = 'Error: command returned a non-zero exit status'
+                self.writeLog(error)
+            self.writeLog(output)
+            output = 
+            self.writeLog(output)
+        except Exception, e:
+            if output:
+                self.writeLog(output)
+            output = "Error: " + str(e)
+            self.writeLog(output)
+            pass
+        finally:
+            if srv:
+                srv.close()
+        return True
 
-    def performSnapshot(self):
-        print "Start snapshot"
 
 def main():
     # Create command line options
