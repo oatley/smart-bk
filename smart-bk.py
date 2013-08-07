@@ -15,8 +15,8 @@ import sqlite3 as lite
 # Create/remove a schedule, get schedule information
 class schedule:
     def __init__(self):
-        self.backupuser = 'backup'
-        self.logdir = '/home/' + self.backupuser + '/logs/'
+        self.logdir = '/var/log/smart-bk/'
+        self.database = '/data/smart-bk/schedule.db'
         self.updateTime()
         self.updateSchedules()
 
@@ -86,7 +86,7 @@ class schedule:
         output = self.day, time, backuptype, sourcehost, desthost, sourcedir, destdir, sourceuser, destuser
         self.writeLog(output)
         try:
-            con = lite.connect('schedule.db')
+            con = lite.connect(self.database)
             cur = con.cursor()
             cur.execute('INSERT INTO Schedule(day, time, type, source_host, dest_host, source_dir, dest_dir, source_user, dest_user) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)', (self.day, time, backuptype, sourcehost, desthost, sourcedir, destdir, sourceuser, destuser))
             con.commit()
@@ -104,11 +104,11 @@ class schedule:
         output = 'Removing scheduleid = ' + str(scheduleid) + ' from all tables'
         self.writeLog(output)
         try:
-            con = lite.connect('schedule.db')
+            con = lite.connect(self.database)
             cur = con.cursor()
-            cur.execute('DELETE FROM Queue WHERE scheduleid = ?', (scheduleid))
-            cur.execute('DELETE FROM Running WHERE scheduleid = ?', (scheduleid))
-            cur.execute('DELETE FROM Schedule WHERE id = ?', (scheduleid))
+            cur.execute('DELETE FROM Queue WHERE scheduleid = ?;', [scheduleid])
+            cur.execute('DELETE FROM Running WHERE scheduleid = ?;', [scheduleid])
+            cur.execute('DELETE FROM Schedule WHERE id = ?;', [scheduleid])
             con.commit()
             con.close()
         except lite.Error, e:
@@ -125,7 +125,7 @@ class schedule:
         queue = []
         running = []
         try:
-            con = lite.connect('schedule.db')
+            con = lite.connect(self.database)
             with con:
                 cur = con.cursor()
                 case = cur.execute('SELECT * FROM Schedule')
@@ -182,8 +182,9 @@ class schedule:
 
     # Check current time and time on schedules, add to queue if time passed
     def queueSchedules(self):
+        self.updateSchedules()
         time = (self.hours * 60 * 60) + (self.minutes * 60)
-        output = "Checking all schedules for expired times:"
+        output = "Checking all schedules for expired times"
         self.writeLog(output)
         for item in self.schedule:
             self.updateSchedules()
@@ -193,8 +194,10 @@ class schedule:
             lastday = item[1]
             scheduleid = item[0]
             if lastday == self.day:
-                return False
+                continue
             if scheduleid in self.queueids:
+                continue 
+            if scheduleid in self.busyids:
                 continue 
             # If the scheduled time has passed, move schedule into queue
             if time >= schedtime:
@@ -204,7 +207,7 @@ class schedule:
                     # Add 0 for strings 1, 2, 3 to 01, 02, 03 - Important for minutes 12:03 looks like 12:3
                     if len(str(self.minutes)) == 1:
                         self.minutes = '0' + self.minutes
-                    con = lite.connect('schedule.db')
+                    con = lite.connect(self.database)
                     cur = con.cursor()
                     cur.execute('INSERT INTO Queue(scheduleid, queuetime) VALUES(?, ?);', (scheduleid, str(self.hours) + ':' + str(self.minutes)))
                     cur.execute('UPDATE schedule SET day=? where id=?;', (str(self.day), scheduleid))
@@ -226,7 +229,7 @@ class schedule:
         if scheduleid in self.queueids:
             return False
         try:
-            con = lite.connect('schedule.db')
+            con = lite.connect(self.database)
             cur = con.cursor()
             cur.execute('INSERT INTO Queue(scheduleid, queuetime) VALUES(?, ?);', (scheduleid, str(self.hours) + ':' + str(self.minutes)))
             con.commit()
@@ -245,7 +248,7 @@ class schedule:
         output = 'Marking scheduleid = ' + scheduleid + ' as expired'
         self.writeLog(output)
         try:
-            con = lite.connect('schedule.db')
+            con = lite.connect(self.database)
             cur = con.cursor()
             cur.execute('UPDATE Schedule SET day=? where id = ?;', (str(int(self.day)-1), scheduleid))
             con.commit()
@@ -266,7 +269,7 @@ class schedule:
         output = 'Deleting scheduleid = ' + scheduleid + ' from queue'
         self.writeLog(output)
         try:
-            con = lite.connect('schedule.db')
+            con = lite.connect(self.database)
             cur = con.cursor()
             cur.execute('DELETE FROM Queue WHERE scheduleid = ?', (scheduleid))
             con.commit()
@@ -285,7 +288,7 @@ class schedule:
         output = 'Deleting scheduleid = ' + scheduleid + ' from running'
         self.writeLog(output)
         try:
-            con = lite.connect('schedule.db')
+            con = lite.connect(self.database)
             cur = con.cursor()
             cur.execute('DELETE FROM Running WHERE scheduleid = ?', (scheduleid))
             con.commit()
@@ -306,7 +309,7 @@ class schedule:
         if scheduleid in self.queueids:
             return False
         try:
-            con = lite.connect('schedule.db')
+            con = lite.connect(self.database)
             cur = con.cursor()
             cur.execute('INSERT INTO running(scheduleid, starttime) VALUES(?, ?);', (scheduleid, str(self.hours) + ':' + str(self.minutes)))
             con.commit()
@@ -324,6 +327,7 @@ class schedule:
 
     # Find all hosts in queue, find which one needs to be run first, move hosts to running if no conflicts
     def startBackup(self):
+        self.updateSchedules()
         hosts = []
         if not self.queueschedules:
                 return False
@@ -348,36 +352,58 @@ class schedule:
                 self.writeLog(output)
                 continue
             # Check hosts for connectivity
-            if not connectHost(self.sourcehost, self.sourceuser):
-                output = 'Unavailable host = ' + self.sourcehost + 'user = ' + self.sourceuser + ' no connection'
+            if not self.connectHost(self.sourcehost, self.sourceuser):
+                output = 'Unavailable host = ' + self.sourcehost + ' user = ' + self.sourceuser + ' no connection'
                 self.writeLog(output)
                 continue
-            if not connectHost(self.desthost, self.destuser):
+            if not self.connectHost(self.desthost, self.destuser):
                 output = 'Unavailable host = ' + self.desthost + ' user = ' + self.destuser + ' no connection'
                 self.writeLog(output)
                 continue
-            hosts.append(self.hostsource)
-            hosts.append(self.hostdest)
+            if self.sourcedir == self.destdir:
+                output = 'Warning sourcedir = ' + self.sourcedir + ' destdir = ' + self.destdir + ' overwriting directories with same name'
+                self.writeLog(output)
+            hosts.append(self.sourcehost)
+            hosts.append(self.desthost)
             self.removeQueue(self.scheduleid)
             self.newRunning(self.scheduleid)
             # Start the backup here 
             if self.backuptype == 'rsync':
-                self.performRsync()
+                success = self.performRsync()
             elif self.backuptype == 'dbdump':
-                self.performDbdump()
+                success = self.performDbdump()
+            elif self.backuptype == 'archive':
+                success = self.performArchive()
+            else:
+                output = 'Error: unknown backup type = ' + self.backuptype + ' in schedule'
+                self.writeLog(output)
             # Finish backup here
             self.removeRunning(self.scheduleid)
+            if success:
+                output = 'Success: ', row
+                self.writeLog(output)
+            else:
+                output = 'Failed: ', row
+                self.writeLog(output)
         return True 
     
     # Log everything
     def writeLog(self, output):
-        print str(output)
+        if isinstance(output, basestring):
+            print str(output)
+        else:
+            for line in output:
+                print str(line).strip()
         log = ""
         if len(str(self.minutes)) == 1:
             self.minutes = '0' + str(self.minutes)
         try:
             log = open(self.logdir + 'smart-bk-' + str(self.year) + '-' + str(self.month) + '-' + str(self.day) + '-' + str(self.hours) + '-' + str(self.minutes) + '.log', 'a+')
-            log.write(str(output)+'\n')
+            if isinstance(output, basestring):
+                log.write(str(output)+'\n')
+            else:
+                for line in output:
+                    log.write(str(line))
         except Exception, e:
             print "Error: " + str(e)
             pass
@@ -385,82 +411,177 @@ class schedule:
             if log:
                 log.close()
              
-
     # Connect to the hosts, return True if success or False if not successful
     def connectHost(self, host, user):
         try:
-            response=urllib2.urlopen('http://'+host,timeout=1)
+            #response=urllib2.urlopen('http://'+host,timeout=1)
             srv = pysftp.Connection(host=host, username=user, log=True)
             srv.close()
             return True
-        except urllib2.URLError as err:pass
+        #except urllib2.URLError as err:pass
         except:pass
         return False
-                                                                                                
 
-    # Backup is complete, clean, log, and email results
-    def performRsync(self):
+    # Check disk space of partition/lv where directory resides
+    def availableSpace(self, user, host, directory):
         output = ""
+        errors = ""
         srv = ""
         try:
-            srv = pysftp.Connection(host=self.sourcehost, username=self.sourceuser, log=True)
-            output = srv.execute('rsync -aHAXEvz --exclude "lost+found" ' + self.sourcedir + ' ' + self.backupuser + '@' + self.desthost + ':' + self.destdir + ';echo $?')
-            if output[-1] != '0':
-                error = 'Error: command returned a non-zero exit status'
-                self.writeLog(error)
+            srv = pysftp.Connection(host=host, username=user, log=True)
+            output = "df " + directory + " | awk '{print $4}' | grep '^[0-9]*$'"
             self.writeLog(output)
-            srv.close()
+            output = srv.execute("df " + directory + " | awk '{print $4}' | grep '^[0-9]*$'")
+            self.writeLog(output)
         except Exception, e:
             if output:
                 self.writeLog(output)
-            output = "Error: " + str(e)
-            self.writeLog(output)
+            errors = "Error: " + str(e)
+            self.writeLog(errors)
             pass
         finally:
             if srv:
                 srv.close()
+        if errors:
+            return False
+        return output
+    
+    # Check total space that this directory uses
+    def usedSpace(self, user, host, directory):
+        output = ""
+        errors = ""
+        srv = ""
+        try:
+            srv = pysftp.Connection(host=host, username=user, log=True)
+            output = "du -s " + directory + " | awk '{print $1}' | grep '^[0-9]*$'"
+            self.writeLog(output)
+            output = srv.execute("du -s " + directory + " | awk '{print $1}' | grep '^[0-9]*$'")
+            self.writeLog(output)
+        except Exception, e:
+            if output:
+                self.writeLog(output)
+            errors = "Error: " + str(e)
+            self.writeLog(errors)
+            pass
+        finally:
+            if srv:
+                srv.close()
+        if errors:
+            return False
+        return output
+             
+                                                                                                
+    # Backup is complete, clean, log, and email results
+    def performRsync(self):
+        output = ""
+        errors = ""
+        srv = ""
+        try:
+            srv = pysftp.Connection(host=self.sourcehost, username=self.sourceuser, log=True)
+            output = 'sudo rsync -aHAXEvz --exclude "lost+found" ' + self.sourcedir + ' ' + self.destuser + '@' + self.desthost + ':' + self.destdir
+            self.writeLog(output)
+            output = srv.execute('sudo rsync -aHAXEvz --exclude "lost+found" ' + self.sourcedir + ' ' + self.destuser + '@' + self.desthost + ':' + self.destdir + ';echo $?')
+            self.writeLog(output)
+            if output[-1].strip() != '0':
+                errors = 'Error: command returned a non-zero exit status'
+                self.writeLog(errors)
+            srv.close()
+        except Exception, e:
+            if output:
+                self.writeLog(output)
+            errors = "Error: " + str(e)
+            self.writeLog(errors)
+            pass
+        finally:
+            if srv:
+                srv.close()
+        if errors:
+            return False
+        return True
+
+
+    # Perfom a archive
+    def performArchive(self):
+        tarfile = '/tmp/archive-' + str(self.year) + '-' + str(self.month) + '-' + str(self.day) + '-' + str(self.hours) + '-' + str(self.minutes) + '.tar.bz'
+        output = ""
+        errors = ""
+        srv = ""
+        try:
+            srv = pysftp.Connection(host=self.sourcehost, username=self.sourceuser, log=True)
+            output = 'sudo tar -cpjvf ' + tarfile + ' ' + self.sourcedir
+            self.writeLog(output)
+            output = srv.execute('sudo tar -cpjvf ' + tarfile + ' ' + self.sourcedir + ';echo $?')
+            self.writeLog(output)
+            if output[-1].strip() != '0':
+                errors = 'Error: command returned a non-zero exit status'
+                self.writeLog(errors)
+            output = 'scp ' + tarfile + ' ' + self.destuser + '@' + self.desthost + ':' + self.destdir
+            self.writeLog(output)
+            output = srv.execute('scp ' + tarfile + ' ' + self.destuser + '@' + self.desthost + ':' + self.destdir + ';echo $?')
+            self.writeLog(output)
+            if output[-1].strip() != '0':
+                errors = 'Error: command returned a non-zero exit status'
+                self.writeLog(errors)
+            srv.close()
+        except Exception, e:
+            if output:
+                self.writeLog(output)
+            errors = "Error: " + str(e)
+            self.writeLog(errors)
+            pass
+        finally:
+            if srv:
+                srv.close()
+        if errors:
+            return False
         return True
 
     # Perform a dbdump on koji... Should probably change this to support a custom db name
     def performDbdump(self):
-        kojifile = '/tmp/kojidb-' + str(self.year) + '-' + str(self.month) + '-' + str(self.day) + '-' + str(self.hours) + '-' + str(self.minutes) + '-' + str(self.seconds) + '.sql'
+        kojifile = '/tmp/kojidb-' + str(self.year) + '-' + str(self.month) + '-' + str(self.day) + '-' + str(self.hours) + '-' + str(self.minutes) + '.sql'
         output = ""
+        errors = ""
         srv = ""
         try:
             srv = pysftp.Connection(host=self.sourcehost, username=self.sourceuser, log=True)
+            output = 'pg_dump koji > ' + kojifile
+            self.writeLog(output)
             output = srv.execute('pg_dump koji > ' + kojifile + ';echo $?')
-            if output[-1] != '0':
-                error = 'Error: command returned a non-zero exit status'
-                self.writeLog(error)
+            self.writeLog(output)
+            if output[-1].strip() != '0':
+                errors = 'Error: command returned a non-zero exit status'
+                self.writeLog(errors)
+            output = 'scp ' + kojifile + ' ' + self.destuser + '@' + self.desthost + ':' + self.destdir
+            self.writeLog(output)
             output = srv.execute('scp ' + kojifile + ' ' + self.destuser + '@' + self.desthost + ':' + self.destdir + ';echo $?')
-            if output[-1] != '0':
-                error = 'Error: command returned a non-zero exit status'
-                self.writeLog(error)
             self.writeLog(output)
-            output = 
-            self.writeLog(output)
+            if output[-1].strip() != '0':
+                errors = 'Error: command returned a non-zero exit status'
+                self.writeLog(errors)
         except Exception, e:
             if output:
                 self.writeLog(output)
-            output = "Error: " + str(e)
-            self.writeLog(output)
+            errors = "Error: " + str(e)
+            self.writeLog(errors)
             pass
         finally:
             if srv:
                 srv.close()
+        if errors:
+            return False
         return True
 
 
 def main():
     # Create command line options
-    desc = """The program %prog is used to run backups from computer to computer. %prog does this by adding and removing schedules
+    desc = """The smart backup scheduler program %prog is used to run backups from computer to computer. %prog does this by adding and removing schedules
 from a schedule database. Once added to the schedule database, %prog should be run with '--queue' in order to intelligently
 add hosts to a queue and start running backups. It is recommended to run this as a cron job fairly often, more fequently
 depending on the number of schedules."""
     parser = optparse.OptionParser(description=desc, usage='Usage: %prog [options]')
+    parser.add_option('-q', '--queue',    help='queue schedules and start backups', dest='queue', default=False, action='store_true')
     parser.add_option('-a', '--add',    help='add new schedule at specific time', dest='add', default=False, action='store_true')
     parser.add_option('-s', '--show',    help='show the schedule and host info', dest='show', default=False, action='store_true')
-    parser.add_option('-q', '--queue',    help='search and add expired schedules to queue', dest='queue', default=False, action='store_true')
     parser.add_option('-r', '--remove',    help='remove existing schedule', dest='remove', default=False, action='store_true')
     parser.add_option('--remove-queue',    help='remove existing schedule from queue', dest='removequeue', default=False, action='store_true')
     parser.add_option('--remove-run',    help='remove existing schedule from running', dest='removerun', default=False, action='store_true')
@@ -468,12 +589,13 @@ depending on the number of schedules."""
     parser.add_option('--add-queue',    help='add a single schedule to queue', dest='addqueue', default=False, action='store_true')
     parser.add_option('--sid',    help='specify schedule id for removing schedules', dest='sid', default=False, action='store', metavar="scheduleid")
     parser.add_option('--time',    help='specify the time to run the backup', dest='time', default=False, action='store', metavar="18:00")
-    parser.add_option('--backup-type',    help='rsync, snapshot, dbdump', dest='backuptype', default=False, action='store', metavar="type")
+    parser.add_option('--backup-type',    help='archive, pg_dump, rsync', dest='backuptype', default=False, action='store', metavar="type")
     parser.add_option('--source-host',    help='specify the source backup host', dest='sourcehost', default=False, action='store', metavar="host")
-    parser.add_option('--dest-host',    help='specify the destination backup host', dest='desthost', default=False, action='store', metavar="host")
     parser.add_option('--source-dir',    help='specify the source backup dir', dest='sourcedir', default=False, action='store', metavar="dir")
+    parser.add_option('--source-user',    help='specify the source user', dest='sourceuser', default=False, action='store', metavar="user")
+    parser.add_option('--dest-host',    help='specify the destination backup host', dest='desthost', default=False, action='store', metavar="host")
     parser.add_option('--dest-dir',    help='specify the destination backup dir', dest='destdir', default=False, action='store', metavar="dir")
-    parser.add_option('--backup-user',    help='specify the user to perform backups', dest='backupuser', default=False, action='store', metavar="user")
+    parser.add_option('--dest-user',    help='specify the destination user', dest='destuser', default=False, action='store', metavar="user")
     parser.add_option('--log-dir',    help='specify the directory to save logs', dest='logdir', default=False, action='store', metavar="dir")
     (opts, args) = parser.parse_args()
     
@@ -497,6 +619,10 @@ depending on the number of schedules."""
         sourcedir = opts.sourcedir
     if opts.destdir:
         destdir = opts.destdir
+    if opts.sourceuser:
+        sourceuser = opts.sourceuser
+    if opts.destuser:
+        destuser = opts.destuser
 
     # Option dependencies
     if opts.remove and not opts.sid:
@@ -520,8 +646,8 @@ depending on the number of schedules."""
         parser.print_help()
         exit(-1)
     if opts.add:
-        if not opts.time or not opts.backuptype or not opts.sourcehost or not opts.desthost or not opts.sourcedir or not opts.destdir:
-            print "Option add requires option time, backup-type, source-host, dest-host, source-dir, dest-dir"
+        if not opts.time or not opts.backuptype or not opts.sourcehost or not opts.desthost or not opts.sourcedir or not opts.destdir or not opts.sourceuser or not opts.destuser:
+            print "Option add requires option time, backup-type, source-host, dest-host, source-dir, dest-dir, source-user, dest-user"
             parser.print_help()
             exit(-1)
 
@@ -532,15 +658,13 @@ depending on the number of schedules."""
 
     # Start program
     scheduler = schedule()
-    if opts.backupuser:
-        scheduler.backupuser = opts.backupuser
     if opts.logdir:
         scheduler.logdir = opts.logdir
     if opts.show: # Displays pretty output of schedule, queue, and running tables
         scheduler = schedule()
         print scheduler
     elif opts.add: # Adds a schedule to the schedule table
-        scheduler.newSchedule(time, backuptype, sourcehost, desthost, sourcedir, destdir)
+        scheduler.newSchedule(time, backuptype, sourcehost, desthost, sourcedir, destdir, sourceuser, destuser)
     elif opts.remove: # Removes a single schedule from the schedules, removes all instances from queue and running
         scheduler.removeSchedule(scheduleid)
     elif opts.removerun: # Removes a single schedule from the queue
