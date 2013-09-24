@@ -412,7 +412,7 @@ class schedule:
         try:
             con = lite.connect(self.database)
             cur = con.cursor()
-            cur.execute('DELETE FROM Queue WHERE scheduleid = ?', [scheduleid])
+            cur.execute('DELETE FROM Queue WHERE scheduleid = ?', (scheduleid))
             con.commit()
         except lite.Error, e:
             if con:
@@ -431,7 +431,7 @@ class schedule:
         try:
             con = lite.connect(self.database)
             cur = con.cursor()
-            cur.execute('DELETE FROM Running WHERE scheduleid = ?', [scheduleid])
+            cur.execute('DELETE FROM Running WHERE scheduleid = ?', (scheduleid))
             con.commit()
         except lite.Error, e:
             if con:
