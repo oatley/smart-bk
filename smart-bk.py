@@ -53,6 +53,8 @@ class tools:
         status = 'success'
         count = 0
         try:
+            scheduler = schedule()
+            max_ids = scheduler.schedule[-1][1]
             # Iterate through a list of files from directory
             for item in os.listdir(self.logdir):
                 # Check if file has todays date
@@ -60,11 +62,17 @@ class tools:
                     # Search through file for success and fails
                     log = open(self.logdir + item)
                     for line in log.readlines():
+                        # Reset the id count in case you run a backup multiple times a day
+                        if count > int(max_ids):
+                            count = 0
                         if re.search('^Success:.*$', line):
                             count = count + 1
                             report = report + 'Success: id = ' + str(count) + '\n'
                         elif re.search('^Failed:.*$', line):
                             count = count + 1
+                            report = report + str(line)
+                            status = 'failed'
+                        elif re.search('^Error:.*$', line):
                             report = report + str(line)
                             status = 'failed'
             subject = 'Backup report - ' + status + ' - ' + date + '\n'
@@ -80,7 +88,7 @@ class tools:
     # Send out the report to email
     def sendReport(self, email, date):
         subject, message = self.showReport(date)
-        fromemail = 'andrew.oatley-willis@senecacollege.ca'
+        fromemail = 'backup@proximity.on.ca'
         msg = MIMEText(message)
         msg['Subject'] = subject
         msg['From'] = fromemail
@@ -310,7 +318,7 @@ class schedule:
             scheduleid = item[0]
             if lastday == self.day:
                 continue
-            if lastday == 99:
+            if lastday == "99":
                 continue
             if scheduleid in self.queueids:
                 continue 
@@ -831,6 +839,14 @@ depending on the number of schedules."""
         print "Option add-queue requires option sid"
         parser.print_help()
         exit(-1)
+    if opts.disableschedule and not opts.sid:
+        print "Option disable-schedule requires option sid"
+        parser.print_help()
+        exit(-1)
+    if opts.enableschedule and not opts.sid:
+        print "Option enable-schedule requires option sid"
+        parser.print_help()
+        exit(-1)
     if opts.add:
         if not opts.time or not opts.backuptype or not opts.sourcehost or not opts.desthost or not opts.sourcedir or not opts.destdir or not opts.sourceuser or not opts.destuser:
             print "Option add requires option time, backup-type, source-host, dest-host, source-dir, dest-dir, source-user, dest-user"
@@ -887,6 +903,10 @@ depending on the number of schedules."""
         scheduler.startBackup()
     elif opts.checkdisk: # Check disk space
         scheduler.availableSpace(scheduleid)
+    elif opts.disableschedule: # Disable schedule
+        scheduler.disableSchedule(scheduleid)
+    elif opts.enableschedule: # Disable schedule
+        scheduler.expireSchedule(scheduleid)
 
 
 
