@@ -54,7 +54,7 @@ class tools:
         count = 0
         try:
             scheduler = schedule()
-            max_ids = scheduler.schedule[-1][1]
+            max_ids = scheduler.schedule[-1][0]
             # Iterate through a list of files from directory
             for item in os.listdir(self.logdir):
                 # Check if file has todays date
