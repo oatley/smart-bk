@@ -53,6 +53,8 @@ class tools:
         status = 'success'
         count = 0
         try:
+            #con = lite.connect('/data/smart-bk/schedule.db')
+            #cur = con.cursor()
             scheduler = schedule()
             max_ids = scheduler.schedule[-1][0]
             # Iterate through a list of files from directory
@@ -67,6 +69,8 @@ class tools:
                             count = 0
                         if re.search('^Success:.*$', line):
                             count = count + 1
+                            # Won't work on older dates with different schedule list
+                            #print cur.execute('SELECT * FROM Schedule WHERE id = ?;', count).fetchone()
                             report = report + 'Success: id = ' + str(count) + '\n'
                         elif re.search('^Failed:.*$', line):
                             count = count + 1
@@ -104,6 +108,20 @@ class tools:
         if os.access(logfile, os.R_OK) and os.access(logfile, os.W_OK):
             access = True
         return access
+    
+    def outputSchedules(self):
+        scheduler = schedule()
+        for line in scheduler.schedule:
+            print 'sbk --add --sid', line[0],\
+                  ' --time', line[2],\
+                  ' --backup-type', line[3],\
+                  ' --source-host', line[4],\
+                  ' --dest-host', line[5],\
+                  ' --source-dir', line[6],\
+                  ' --dest-dir', line[7],\
+                  ' --source-user', line[8],\
+                  ' --dest-user', line[9]
+
 
 # Schedule is used to completely manage schedules and backups
 class schedule:
@@ -783,6 +801,7 @@ depending on the number of schedules."""
     parser.add_option('--send-report',    help='send report to email', dest='sendreport', default=False, action='store_true')
     parser.add_option('--report-date',    help='specify the date for report checking', dest='reportdate', default=False, action='store', metavar="yyyy-mm-dd")
     parser.add_option('--report-email',    help='specify the email to send report', dest='reportemail', default=False, action='store', metavar="a@b.ca")
+    parser.add_option('--save-schedules',    help='print out schedules in bash script', dest='saveschedules', default=False, action='store_true')
     (opts, args) = parser.parse_args()
     
     # No options entered
@@ -907,6 +926,8 @@ depending on the number of schedules."""
         scheduler.disableSchedule(scheduleid)
     elif opts.enableschedule: # Disable schedule
         scheduler.expireSchedule(scheduleid)
+    elif opts.saveschedules: # output schedules in bash
+        schedulerTools.outputSchedules()
 
 
 
