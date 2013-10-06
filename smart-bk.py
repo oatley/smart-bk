@@ -52,9 +52,8 @@ class tools:
         log = ''
         status = 'success'
         count = 0
+        scheduler = schedule()
         try:
-            #con = lite.connect('/data/smart-bk/schedule.db')
-            #cur = con.cursor()
             scheduler = schedule()
             max_ids = scheduler.schedule[-1][0]
             # Iterate through a list of files from directory
@@ -64,14 +63,13 @@ class tools:
                     # Search through file for success and fails
                     log = open(self.logdir + item)
                     for line in log.readlines():
+                        description = scheduler.schedule[count][10]
                         # Reset the id count in case you run a backup multiple times a day
                         if count > int(max_ids):
                             count = 0
                         if re.search('^Success:.*$', line):
                             count = count + 1
-                            # Won't work on older dates with different schedule list
-                            #print cur.execute('SELECT * FROM Schedule WHERE id = ?;', count).fetchone()
-                            report = report + 'Success: id = ' + str(count) + '\n'
+                            report = report + 'Success: id = ' + str(count) + " - " + description + '\n'
                         elif re.search('^Failed:.*$', line):
                             count = count + 1
                             report = report + str(line)
@@ -112,15 +110,16 @@ class tools:
     def outputSchedules(self):
         scheduler = schedule()
         for line in scheduler.schedule:
-            print 'sbk --add --sid', line[0],\
-                  ' --time', line[2],\
-                  ' --backup-type', line[3],\
-                  ' --source-host', line[4],\
-                  ' --dest-host', line[5],\
-                  ' --source-dir', line[6],\
-                  ' --dest-dir', line[7],\
-                  ' --source-user', line[8],\
-                  ' --dest-user', line[9]
+            print 'sbk --add ',\
+                  ' --time="' + str(line[2]) + '"',\
+                  ' --backup-type="' + str(line[3]) + '"',\
+                  ' --source-host="' + str(line[4]) + '"',\
+                  ' --dest-host="' + str(line[5]) + '"',\
+                  ' --source-dir="' + str(line[6]) + '"',\
+                  ' --dest-dir="' + str(line[7]) + '"',\
+                  ' --source-user="' + str(line[8]) + '"',\
+                  ' --dest-user="' + str(line[9]) + '"',\
+                  ' --desc="' + str(line[10]) + '"'
 
 
 # Schedule is used to completely manage schedules and backups
@@ -223,13 +222,13 @@ class schedule:
         return self.prettySchedule()
     
     # Create a new schedule
-    def newSchedule(self, time, backuptype, sourcehost, desthost, sourcedir, destdir, sourceuser, destuser):
-        output = self.day, time, backuptype, sourcehost, desthost, sourcedir, destdir, sourceuser, destuser
+    def newSchedule(self, time, backuptype, sourcehost, desthost, sourcedir, destdir, sourceuser, destuser, desc):
+        output = self.day, time, backuptype, sourcehost, desthost, sourcedir, destdir, sourceuser, destuser, desc
         self.writeLog(output)
         try:
             con = lite.connect(self.database)
             cur = con.cursor()
-            cur.execute('INSERT INTO Schedule(day, time, type, source_host, dest_host, source_dir, dest_dir, source_user, dest_user) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)', (self.day, time, backuptype, sourcehost, desthost, sourcedir, destdir, sourceuser, destuser))
+            cur.execute('INSERT INTO Schedule(day, time, type, source_host, dest_host, source_dir, dest_dir, source_user, dest_user, desc) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', (self.day, time, backuptype, sourcehost, desthost, sourcedir, destdir, sourceuser, destuser, desc))
             con.commit()
             con.close()
         except lite.Error, e:
@@ -260,6 +259,13 @@ class schedule:
             self.writeLog(output)
             exit()
     
+    # Remove all schedules
+    def removeSchedules(self):
+        output = 'Removing ALL schedules from ALL tables'
+        self.writeLog(output)
+        for line in self.schedule:
+            self.removeSchedule(line[0])
+
     # Output the schedule in a list
     def listSchedule(self):
         schedule = []
@@ -272,8 +278,8 @@ class schedule:
                 case = cur.execute('SELECT * FROM Schedule')
                 rows = cur.fetchall()
                 for row in rows:
-                    # id, day, time, type, sourcehost, desthost, sourcedir, destdir, sourceuser, destuser
-                    schedule.append([row[0], row[1].strip(), row[2].strip(), row[3].strip(), row[4].strip(), row[5].strip(), row[6].strip(), row[7].strip(), row[8].strip(), row[9].strip()])
+                    # id, day, time, type, sourcehost, desthost, sourcedir, destdir, sourceuser, destuser, desc
+                    schedule.append([row[0], row[1].strip(), row[2].strip(), row[3].strip(), row[4].strip(), row[5].strip(), row[6].strip(), row[7].strip(), row[8].strip(), row[9].strip(), row[10].strip()])
                 case = cur.execute('SELECT * FROM Queue')
                 rows = cur.fetchall()
                 for row in rows:
@@ -298,7 +304,7 @@ class schedule:
         # Schedule
         print "\n\t" * 10 + "-[Schedule]-"
         print "-" * 100
-        print "id" + "|" + "day" + "|" + "time" + "|" + "type" + "|" + "source host" + "|" + "dest host" + "|" + "source dir" + "|" + "dest dir" + "|" + "source user" + "|" + "dest user"
+        print "id" + "|" + "day" + "|" + "time" + "|" + "type" + "|" + "source host" + "|" + "dest host" + "|" + "source dir" + "|" + "dest dir" + "|" + "source user" + "|" + "dest user" + "|"
         print "-" * 100
         for item in self.schedule:
             print str(item[0]) + "|" + item[1] + "|" + item[2] + "|" + item[3] + "|" + item[4] + "|" + item[5] + "|" + item[6] + "|" + item[7] + "|" + item[8] + "|" + item[9]
@@ -781,6 +787,7 @@ depending on the number of schedules."""
     parser.add_option('-d', '--display-hosts',    help='display busy and free hosts', dest='displayhosts', default=False, action='store_true')
     parser.add_option('--remove-run',    help='remove existing schedule from running', dest='removerun', default=False, action='store_true')
     parser.add_option('--remove-queue',    help='remove existing schedule from queue', dest='removequeue', default=False, action='store_true')
+    parser.add_option('--remove-all',    help='remove all schedules', dest='removeall', default=False, action='store_true')
     parser.add_option('--clear-queue',    help='remove all schedules from queue', dest='clearqueue', default=False, action='store_true')
     parser.add_option('--expire',    help='expire the day in schedule', dest='expire', default=False, action='store_true')
     parser.add_option('--disable-schedule',    help='stop a schedule from running', dest='disableschedule', default=False, action='store_true')
@@ -795,6 +802,7 @@ depending on the number of schedules."""
     parser.add_option('--dest-host',    help='specify the destination backup host', dest='desthost', default=False, action='store', metavar="host")
     parser.add_option('--dest-dir',    help='specify the destination backup dir', dest='destdir', default=False, action='store', metavar="dir")
     parser.add_option('--dest-user',    help='specify the destination user', dest='destuser', default=False, action='store', metavar="user")
+    parser.add_option('--desc',    help='specify a short description for backup', dest='desc', default=False, action='store', metavar="desc")
     parser.add_option('--log-dir',    help='specify the directory to save logs', dest='logdir', default=False, action='store', metavar="dir")
     parser.add_option('--check-disk',    help='check disk space on directory and volume', dest='checkdisk', default=False, action='store_true')
     parser.add_option('--show-report',    help='show report for date specified', dest='showreport', default=False, action='store_true')
@@ -828,6 +836,8 @@ depending on the number of schedules."""
         sourceuser = opts.sourceuser
     if opts.destuser:
         destuser = opts.destuser
+    if opts.desc:
+        desc = opts.desc
     if opts.reportdate:
         reportdate = opts.reportdate
     if opts.reportemail:
@@ -867,8 +877,8 @@ depending on the number of schedules."""
         parser.print_help()
         exit(-1)
     if opts.add:
-        if not opts.time or not opts.backuptype or not opts.sourcehost or not opts.desthost or not opts.sourcedir or not opts.destdir or not opts.sourceuser or not opts.destuser:
-            print "Option add requires option time, backup-type, source-host, dest-host, source-dir, dest-dir, source-user, dest-user"
+        if not opts.time or not opts.backuptype or not opts.sourcehost or not opts.desthost or not opts.sourcedir or not opts.destdir or not opts.sourceuser or not opts.destuser or not opts.desc:
+            print "Option add requires option time, backup-type, source-host, dest-host, source-dir, dest-dir, source-user, dest-user, desc"
             parser.print_help()
             exit(-1)
     if opts.showreport and not opts.reportdate:
@@ -904,7 +914,7 @@ depending on the number of schedules."""
         print reportdate
         schedulerTools.sendReport(reportemail, reportdate)
     elif opts.add: # Adds a schedule to the schedule table
-        scheduler.newSchedule(time, backuptype, sourcehost, desthost, sourcedir, destdir, sourceuser, destuser)
+        scheduler.newSchedule(time, backuptype, sourcehost, desthost, sourcedir, destdir, sourceuser, destuser, desc)
     elif opts.remove: # Removes a single schedule from the schedules, removes all instances from queue and running
         scheduler.removeSchedule(scheduleid)
     elif opts.removerun: # Removes a single schedule from the queue
@@ -928,6 +938,9 @@ depending on the number of schedules."""
         scheduler.expireSchedule(scheduleid)
     elif opts.saveschedules: # output schedules in bash
         schedulerTools.outputSchedules()
+    elif opts.removeall: # output schedules in bash
+        schedulerTools.outputSchedules()
+        scheduler.removeSchedules()
 
 
 
