@@ -38,24 +38,28 @@ class tools:
                 for line in output:
                     log.write(str(line))
         except Exception, e:
-            print 'Error: ' + str(e)
+            print 'sbklog|error|' + str(e)
             pass
         finally:
             if log:
                 log.close()
     
+    # NEED TO REWRITE THIS FUNCTION, RECORD ALL SUCCESS AND FAILURE IN DATABASE not text file
     # Search through all log files from today, find if any tasks failed
     def showReport(self, date):
         subject = ''
         message = ''
-        report = ''
+        report = ['View backup website: http://iraq.proximity.on.ca/sbk/sbk.pl\n\n']
         log = ''
         status = 'success'
-        count = 0
-        scheduler = schedule()
+        logsbk = ''
+        logstatus = ''
+        logsid = ''
+        logerror = ''
+        logstart = ''
+        logend = ''
         try:
             scheduler = schedule()
-            max_ids = scheduler.schedule[-1][0]
             # Iterate through a list of files from directory
             for item in os.listdir(self.logdir):
                 # Check if file has todays date
@@ -63,24 +67,26 @@ class tools:
                     # Search through file for success and fails
                     log = open(self.logdir + item)
                     for line in log.readlines():
-                        description = scheduler.schedule[count][10]
                         # Reset the id count in case you run a backup multiple times a day
-                        if count > int(max_ids):
-                            count = 0
-                        if re.search('^Success:.*$', line):
-                            count = count + 1
-                            report = report + 'Success: id = ' + str(count) + " - " + description + '\n'
-                        elif re.search('^Failed:.*$', line):
-                            count = count + 1
-                            report = report + str(line)
+                        if re.search('^sbklog\|success\|.*$', line):
+                            logsbk, logstatus, logsid, logstart, logend = line.strip().split("|")
+                            # Log status, success or failed, logsid, and take the description for the same logsid
+                            report.append(logstatus + '\t\t| id = ' + logsid + ' - ' + scheduler.schedule[int(logsid)-1][-1])
+                        elif re.search('^sbklog\|failed\|.*$', line):
+                            logsbk, logstatus, logsid, logstart, logend, logerror = line.strip().split("|")
+                            # Log status, success or failed, logsid, and take the description for the same logsid
+                            report.append(logstatus + '\t\t| id = ' + logsid + ' - ' + scheduler.schedule[int(logsid)-1][-1] + ' - ' + logerror)
                             status = 'failed'
-                        elif re.search('^Error:.*$', line):
-                            report = report + str(line)
+                        elif re.search('^sbklog\|disabled\|.*$', line):
+                            logsbk, logstatus, logsid = line.strip().split("|")
+                            # Log status, success or failed, logsid, and take the description for the same logsid
+                            report.append(logstatus + '\t| id = ' + logsid + ' - ' + scheduler.schedule[int(logsid)-1][-1])
+                        elif re.search('^sbklog\|error\|.*$', line):
                             status = 'failed'
             subject = 'Backup report - ' + status + ' - ' + date + '\n'
-            message = '[' + date + ']\n\n' + subject + '\n\n' + report
+            message = ['[' + date + ']\n\n', subject + '\n\n', report]
         except Exception, e:
-            print 'Error: ' + str(e)
+            print 'sbklog|error|(more reporting errors?) ' + str(e)
             pass
         finally:
             if log:
@@ -121,6 +127,29 @@ class tools:
                   ' --dest-user="' + str(line[9]) + '"',\
                   ' --desc="' + str(line[10]) + '"'
 
+    # Record logs into a database
+    def recordLog(self, scheduleid, status, errors, starttime, endtime):
+        #output = 'Adding scheduleid = ' + scheduleid + ' to logs'
+        #self.writeLog(output)
+        if scheduleid in self.queueids:
+            return False
+        try:
+            con = lite.connect(self.database)
+            cur = con.cursor()
+            cur.execute('INSERT INTO logs(scheduleid, status, errors, start_time, end_time ) VALUES(?, ?, ?, ?, ?);', (scheduleid, status, errors, starttime, endtime))
+            con.commit()
+        except lite.Error, e:
+            if con:
+                con.rollback()
+                #output = 'sbklog|error|' + e.args[0]
+                #self.writeLog(output)
+                exit()
+        finally:
+            if con:
+                con.close()
+        return True
+
+
 
 # Schedule is used to completely manage schedules and backups
 class schedule:
@@ -137,6 +166,7 @@ class schedule:
         self.year, self.month, self.day = self.now[0].split('-')
         self.hours, self.minutes, self.seconds = self.now[1].split(':')
         self.hours, self.minutes = int(self.hours), int(self.minutes)
+        self.day = int(self.day)
 
     # Update schedules
     def updateSchedules(self):
@@ -235,7 +265,7 @@ class schedule:
             if con:
                 con.rollback()
                 con.close()
-            output = 'Error: ' + e.args[0]
+            output = 'sbklog|error|' + e.args[0]
             self.writeLog(output)
             exit()
     
@@ -255,7 +285,7 @@ class schedule:
             if con:
                 con.rollback()
                 con.close()
-            output = 'Error: ' + e.args[0]
+            output = 'sbklog|error|' + e.args[0]
             self.writeLog(output)
             exit()
     
@@ -263,8 +293,10 @@ class schedule:
     def removeSchedules(self):
         output = 'Removing ALL schedules from ALL tables'
         self.writeLog(output)
-        for line in self.schedule:
-            self.removeSchedule(line[0])
+        output = 'I disabled this option because it seems too dangerous :p'
+        self.writeLog(output)
+        #for line in self.schedule:
+        #    self.removeSchedule(line[0])
 
     # Output the schedule in a list
     def listSchedule(self):
@@ -295,7 +327,7 @@ class schedule:
             if con:
                 con.rollback()
                 con.close()
-            output = 'Error: ' + e.args[0]
+            output = 'sbklog|error|' + e.args[0]
             self.writeLog(output)
             exit()
     
@@ -330,26 +362,36 @@ class schedule:
     # Check current time and time on schedules, add to queue if time passed
     def queueSchedules(self):
         self.updateSchedules()
-        time = (self.hours * 60 * 60) + (self.minutes * 60)
+        time = ((self.day * 24) * 60 * 60) + (self.hours * 60 * 60) + (self.minutes * 60)
         output = "Checking all schedules for expired times"
         self.writeLog(output)
         for item in self.schedule:
+            #print "real =" + self.month + " schedule=" 
             self.updateSchedules()
             shours, sminutes = item[2].split(':')
             shours, sminutes = int(shours), int(sminutes)
-            schedtime = (shours * 60 * 60) + (sminutes * 60)
-            lastday = item[1]
+            lastday = int(item[1])
+            schedtime = ((lastday * 24) * 60 * 60 ) + (shours * 60 * 60) + (sminutes * 60)
             scheduleid = item[0]
             if lastday == self.day:
                 continue
-            if lastday == "99":
+            if lastday == 99:
+                startdate, time = str(datetime.datetime.now()).split(' ')
+                starttime, garbage = time.split('.')
+                enddate, time = str(datetime.datetime.now()).split(' ')
+                endtime, garbage = time.split('.')
+                status = 'disabled'
+                errors = ''
+                output = 'sbklog|' + status + '|' + str(scheduleid)
+                self.writeLog(output)
+                self.recordLog(scheduleid, status, errors, startdate, starttime, enddate, endtime)
                 continue
             if scheduleid in self.queueids:
                 continue 
             if scheduleid in self.busyids:
                 continue 
-            # If the scheduled time has passed, move schedule into queue
-            if time >= schedtime:
+            # If the scheduled time has passed, move schedule into queue, also check the day
+            if time >= schedtime or ( int(self.day) < int(lastday - 1)):
                 output = 'Adding scheduleid = ' + str(scheduleid) + ' to queue'
                 self.writeLog(output)
                 try:
@@ -364,7 +406,7 @@ class schedule:
                 except lite.Error, e:
                     if con:
                         con.rollback()
-                    output = 'Error: ' + e.args[0]
+                    output = 'sbklog|error|' + e.args[0]
                     self.writeLog(output)
                     exit()
                 finally:
@@ -385,7 +427,7 @@ class schedule:
         except lite.Error, e:
             if con:
                 con.rollback()
-                output = 'Error: ' + e.args[0]
+                output = 'sbklog|error|' + e.args[0]
                 self.writeLog(output)
                 exit()
         finally:
@@ -404,7 +446,7 @@ class schedule:
         except lite.Error, e:
             if con:
                 con.rollback()
-                output = 'Error: ' + e.args[0]
+                output = 'sbklog|error|' + e.args[0]
                 self.writeLog(output)
                 exit()
         finally:
@@ -424,7 +466,7 @@ class schedule:
         except lite.Error, e:
             if con:
                 con.rollback()
-                output = 'Error: ' + e.args[0]
+                output = 'sbklog|error|' + e.args[0]
                 self.writeLog(output)
                 exit()
         finally:
@@ -449,7 +491,7 @@ class schedule:
         except lite.Error, e:
             if con:
                 con.rollback()
-            output = 'Error: ' + e.args[0]
+            output = 'sbklog|error|' + e.args[0]
             self.writeLog(output)
             exit()
         finally:
@@ -468,7 +510,7 @@ class schedule:
         except lite.Error, e:
             if con:
                 con.rollback()
-            output = 'Error: ' + e.args[0]
+            output = 'sbklog|error|' + e.args[0]
             self.writeLog(output)
             exit()
         finally:
@@ -489,7 +531,7 @@ class schedule:
         except lite.Error, e:
             if con:
                 con.rollback()
-                output = 'Error: ' + e.args[0]
+                output = 'sbklog|error|' + e.args[0]
                 self.writeLog(output)
                 exit()
         finally:
@@ -500,12 +542,20 @@ class schedule:
 
     # Find all hosts in queue, find which one needs to be run first, move hosts to running if no conflicts
     def startBackup(self):
+        #schedulerTools = tools()
         self.updateSchedules()
         hosts = []
         if not self.queueschedules:
                 return False
         for row in self.queueschedules:
             self.updateSchedules()
+            # UTC format YYYY-MM-DDThh:mm:ss
+            #starttime, garbage = "T".join(str(datetime.datetime.now()).split(' ')).split('.')
+            #endtime, garbage = "T".join(str(datetime.datetime.now()).split(' ')).split('.')
+            startdate, time = str(datetime.datetime.now()).split(' ')
+            starttime, garbage = time.split('.')
+            enddate, time = str(datetime.datetime.now()).split(' ')
+            endtime, garbage = time.split('.')
             # Easy to use variables for backups
             self.scheduleid = str(row[0])
             self.backuptype = row[3]
@@ -517,32 +567,37 @@ class schedule:
             self.destuser = row[9]
             # Check if this backup is already running
             if row in self.busyschedules:
-                output = 'Failed: Busy scheduleid = ' + self.scheduleid + ' already running'
+                status = 'failed'
+                errors = 'busy_scheduleid_aleady_running'
+                output = 'sbklog|' + status + '|' + self.scheduleid + '|' + starttime + '|' + endtime + '|' + errors
                 self.writeLog(output)
-                output = 'Failed: ', row, '\n'
-                self.writeLog(output)
+                self.recordLog(self.scheduleid, status, errors, startdate, starttime, enddate, endtime)
                 continue
             if self.sourcehost in self.busyhosts or self.desthost in self.busyhosts:
-                output = 'Failed: Busy scheduleid = ' + self.scheduleid + ' busy hosts = ', self.busyhosts, '\n'
+                status = 'failed'
+                errors = 'busy_scheduleid_busy_hosts=' + self.sourcehost + '/' +self.desthost
+                output = 'sbklog|' + status + '|' + self.scheduleid + '|' + starttime + '|' + endtime + '|' + errors
                 self.writeLog(output)
-                output = 'Failed: ', row, '\n'
-                self.writeLog(output)
+                self.recordLog(self.scheduleid, status, errors, startdate, starttime, enddate, endtime)
                 continue
             # Check hosts for connectivity
             if not self.connectHost(self.sourcehost, self.sourceuser):
-                output = 'Failed: Unavailable host = ' + self.sourcehost + ' user = ' + self.sourceuser + ' no connection'
+                status = 'failed'
+                errors = 'no_connection_unavailable_host=' + self.sourcehost
+                output = 'sbklog|' + status + '|' + self.scheduleid + '|' + starttime + '|' + endtime + '|' + errors
                 self.writeLog(output)
-                output = 'Failed: ', row, '\n'
-                self.writeLog(output)
+                self.recordLog(self.scheduleid, status, errors, startdate, starttime, enddate, endtime)
                 continue
             if not self.connectHost(self.desthost, self.destuser):
-                output = 'Failed: Unavailable host = ' + self.desthost + ' user = ' + self.destuser + ' no connection'
+                status = 'failed'
+                errors = 'no_connection_unavailable_host=' + self.desthost
+                output = 'sbklog|' + status + '|' + self.scheduleid + '|' + starttime + '|' + endtime + '|' + errors
                 self.writeLog(output)
-                output = 'Failed: ', row, '\n'
-                self.writeLog(output)
+                self.recordLog(self.scheduleid, status, errors, startdate, starttime, enddate, endtime)
                 continue
             if self.sourcedir == self.destdir:
-                output = 'Failed: Warning sourcedir = ' + self.sourcedir + ' destdir = ' + self.destdir + ' overwriting directories with same name'
+                status = 'error'
+                output = 'sbklog|error|' + self.scheduleid + '|warning_sourcedir_overwriting_directories_same_name=' + self.sourcedir
                 self.writeLog(output)
             hosts.append(self.sourcehost)
             hosts.append(self.desthost)
@@ -556,18 +611,52 @@ class schedule:
             elif self.backuptype == 'archive':
                 success = self.performArchive()
             else:
-                output = 'Error: unknown backup type = ' + self.backuptype + ' in schedule'
+                output = 'sbklog|error|' + self.scheduleid + '|unknown_backup_type=' + self.backuptype
+                success = False
                 self.writeLog(output)
             # Finish backup here
             self.removeRunning(self.scheduleid)
+            #endtime, garbage = "T".join(str(datetime.datetime.now()).split(' ')).split('.')
+            enddate, time = str(datetime.datetime.now()).split(' ')
+            endtime, garbage = time.split('.')
             if success:
-                output = 'Success: ', row, '\n'
+                #output = 'sbklog:success: ', row, '\n'
+                status = 'success'
+                errors = ''
+                output = 'sbklog|' + status + '|' + self.scheduleid + '|' + starttime + '|' + endtime
                 self.writeLog(output)
+                self.recordLog(self.scheduleid, status, errors, startdate, starttime, enddate, endtime)
             else:
-                output = 'Failed: ', row, '\n'
+                status = 'failed'
+                errors = 'error_unable_to_' + str(self.backuptype)
+                output = 'sbklog|' + status + '|' + self.scheduleid + '|' + starttime + '|' + endtime + '|' + errors
                 self.writeLog(output)
+                self.recordLog(self.scheduleid, status, errors, startdate, starttime, enddate, endtime)
         return True 
     
+    # Record logs into a database
+    def recordLog(self, scheduleid, status, errors, startdate, starttime, enddate, endtime):
+        output = 'Adding scheduleid = ' + str(scheduleid) + ' to logs'
+        self.writeLog(output)
+        if scheduleid in self.queueids:
+            return False
+        try:
+            con = lite.connect(self.database)
+            cur = con.cursor()
+            cur.execute('INSERT INTO logs(scheduleid, status, errors, start_date, start_time, end_date, end_time ) VALUES(?, ?, ?, ?, ?, ?, ?);', (str(scheduleid), status, errors, startdate, starttime, enddate, endtime))
+            con.commit()
+        except lite.Error, e:
+            if con:
+                con.rollback()
+                output = 'sbklog|error|' + e.args[0]
+                self.writeLog(output)
+                exit()
+        finally:
+            if con:
+                con.close()
+        return True
+
+
     # Log everything
     def writeLog(self, output):
         if isinstance(output, basestring):
@@ -586,7 +675,7 @@ class schedule:
                 for line in output:
                     log.write(str(line))
         except Exception, e:
-            print "Error: " + str(e)
+            print "sbklog|error|" + str(e)
             pass
         finally:
             if log:
@@ -635,7 +724,7 @@ class schedule:
         except Exception, e:
             if output:
                 self.writeLog(output)
-            errors = "Error: " + str(e)
+            errors = "sbklog|error|" + str(e)
             self.writeLog(errors)
             pass
         finally:
@@ -659,7 +748,7 @@ class schedule:
         except Exception, e:
             if output:
                 self.writeLog(output)
-            errors = "Error: " + str(e)
+            errors = "sbklog|error|" + str(e)
             self.writeLog(errors)
             pass
         finally:
@@ -677,18 +766,18 @@ class schedule:
         srv = ""
         try:
             srv = pysftp.Connection(host=self.sourcehost, username=self.sourceuser, log=True)
-            output = 'sudo rsync -aHAXEvz --exclude "lost+found" ' + self.sourcedir + ' ' + self.destuser + '@' + self.desthost + ':' + self.destdir
+            output = 'sudo rsync -aHXvz --exclude "lost+found" ' + self.sourcedir + ' ' + self.destuser + '@' + self.desthost + ':' + self.destdir
             self.writeLog(output)
             output = srv.execute('sudo rsync -aHAXEvz --exclude "lost+found" ' + self.sourcedir + ' ' + self.destuser + '@' + self.desthost + ':' + self.destdir + ';echo $?')
             self.writeLog(output)
             if output[-1].strip() != '0':
-                errors = 'Error: command returned a non-zero exit status'
+                errors = 'sbklog|error|command returned a non-zero exit status'
                 self.writeLog(errors)
             srv.close()
         except Exception, e:
             if output:
                 self.writeLog(output)
-            errors = "Error: " + str(e)
+            errors = "sbklog|error|" + str(e)
             self.writeLog(errors)
             pass
         finally:
@@ -712,7 +801,7 @@ class schedule:
             output = srv.execute('sudo tar -cpjvf ' + tarfile + ' ' + self.sourcedir + ';echo $?')
             self.writeLog(output)
             if output[-1].strip() != '0':
-                errors = 'Error: command returned a non-zero exit status'
+                errors = 'sbklog|error|command returned a non-zero exit status'
                 self.writeLog(errors)
                 #raise Exception(errors)
             output = 'scp ' + tarfile + ' ' + self.destuser + '@' + self.desthost + ':' + self.destdir
@@ -720,14 +809,14 @@ class schedule:
             output = srv.execute('scp ' + tarfile + ' ' + self.destuser + '@' + self.desthost + ':' + self.destdir + ';echo $?')
             self.writeLog(output)
             if output[-1].strip() != '0':
-                errors = 'Error: command returned a non-zero exit status'
+                errors = 'sbklog|error|command returned a non-zero exit status'
                 self.writeLog(errors)
                 #raise Exception(errors)
             srv.close()
         except Exception, e:
             if output:
                 self.writeLog(output)
-            errors = "Error: " + str(e)
+            errors = "sbklog|error|" + str(e)
             self.writeLog(errors)
             pass
         finally:
@@ -750,19 +839,19 @@ class schedule:
             output = srv.execute('pg_dump koji > ' + kojifile + ';echo $?')
             self.writeLog(output)
             if output[-1].strip() != '0':
-                errors = 'Error: command returned a non-zero exit status'
+                errors = 'sbklog|error|command returned a non-zero exit status'
                 self.writeLog(errors)
             output = 'scp ' + kojifile + ' ' + self.destuser + '@' + self.desthost + ':' + self.destdir
             self.writeLog(output)
             output = srv.execute('scp ' + kojifile + ' ' + self.destuser + '@' + self.desthost + ':' + self.destdir + ';echo $?')
             self.writeLog(output)
             if output[-1].strip() != '0':
-                errors = 'Error: command returned a non-zero exit status'
+                errors = 'sbklog|error|command returned a non-zero exit status'
                 self.writeLog(errors)
         except Exception, e:
             if output:
                 self.writeLog(output)
-            errors = "Error: " + str(e)
+            errors = "sbklog|error|" + str(e)
             self.writeLog(errors)
             pass
         finally:
@@ -908,7 +997,15 @@ depending on the number of schedules."""
         scheduler.displaySchedule()
     elif opts.showreport:
         subject, report = schedulerTools.showReport(reportdate)
-        print report
+        #print report
+        for item in report:
+            if type(item) is list:
+                item.sort(key=lambda x: x[1])
+                item.sort(key=lambda x: x[0])
+                for schd in item:
+                    print ''.join(str(i) for i in schd).strip()
+            else:
+                print item
     elif opts.sendreport:
         print reportemail
         print reportdate
