@@ -28,6 +28,8 @@ class tools:
             for line in output:
                 print str(line).strip()
         log = ""
+        if len(str(self.day)) == 1:
+            self.day = '0' + str(self.day)
         if len(str(self.minutes)) == 1:
             self.minutes = '0' + str(self.minutes)
         try:
@@ -58,8 +60,14 @@ class tools:
         logerror = ''
         logstart = ''
         logend = ''
+        count = 0 # finished backups
+        countrunning = 0 # started
+        countqueue = 0 # queued
+        countdisabled = 0 # queued
+	countfailed = 0 # failed
         try:
             scheduler = schedule()
+            total = len(scheduler.schedule)
             # Iterate through a list of files from directory
             for item in os.listdir(self.logdir):
                 # Check if file has todays date
@@ -72,19 +80,39 @@ class tools:
                             logsbk, logstatus, logsid, logstart, logend = line.strip().split("|")
                             # Log status, success or failed, logsid, and take the description for the same logsid
                             report.append(logstatus + '\t\t| id = ' + logsid + ' - ' + scheduler.schedule[int(logsid)-1][-1])
+                            count = count + 1
                         elif re.search('^sbklog\|failed\|.*$', line):
                             logsbk, logstatus, logsid, logstart, logend, logerror = line.strip().split("|")
                             # Log status, success or failed, logsid, and take the description for the same logsid
                             report.append(logstatus + '\t\t| id = ' + logsid + ' - ' + scheduler.schedule[int(logsid)-1][-1] + ' - ' + logerror)
                             status = 'failed'
+                            countfailed = countfailed + 1
                         elif re.search('^sbklog\|disabled\|.*$', line):
                             logsbk, logstatus, logsid = line.strip().split("|")
                             # Log status, success or failed, logsid, and take the description for the same logsid
                             report.append(logstatus + '\t| id = ' + logsid + ' - ' + scheduler.schedule[int(logsid)-1][-1])
+                            countdisabled = countdisabled + 1
+                        elif re.search('^sbklog\|queue\|.*$', line):
+                            countqueue = countqueue + 1
+                        elif re.search('^sbklog\|running\|.*$', line):
+                            countrunning = countrunning + 1
                         elif re.search('^sbklog\|error\|.*$', line):
                             status = 'failed'
+            
+            # sbk was run multiple times
+            #if countrunning > count:
+            #    report.append('Schedules Queued = ' + str(count) + '/' + str(countrunning) + '\n\n\n')
+            #    report.append('Backups are still running\n')
+            #else:
+            #    report.append('Schedules Queued = ' + str(count) + '/' + str(countrunning) + '\n\n\n')
+            report.append('-Backups Disabled = ' + str(countdisabled) + '\n')
+            report.append('-Backups Queued = ' + str(countqueue) + '\n')
+            report.append('-Backups Started = ' + str(countrunning) + '\n')
+            report.append('-Backups Failed = ' + str(countfailed) + '\n')
+            report.append('-Backups Successful = ' + str(count) + '\n')
+
             subject = 'Backup report - ' + status + ' - ' + date + '\n'
-            message = ['[' + date + ']\n\n', subject + '\n\n', report]
+            message = ['[' + date + ']\n\n', subject + '\n', report]
         except Exception, e:
             print 'sbklog|error|(more reporting errors?) ' + str(e)
             pass
@@ -303,6 +331,7 @@ class schedule:
         schedule = []
         queue = []
         running = []
+        con = ''
         try:
             con = lite.connect(self.database)
             with con:
@@ -394,6 +423,8 @@ class schedule:
             if time >= schedtime or ( int(self.day) < int(lastday - 1)):
                 output = 'Adding scheduleid = ' + str(scheduleid) + ' to queue'
                 self.writeLog(output)
+                output = 'sbklog|queue|' + str(scheduleid) + '|'
+                self.writeLog(output)
                 try:
                     # Add 0 for strings 1, 2, 3 to 01, 02, 03 - Important for minutes 12:03 looks like 12:3
                     if len(str(self.minutes)) == 1:
@@ -416,6 +447,8 @@ class schedule:
 
     def queueSchedule(self, scheduleid):
         output = 'Adding scheduleid = ' + scheduleid + ' to queue'
+        self.writeLog(output)
+        output = 'sbklog|queue|' + str(scheduleid) + '|'
         self.writeLog(output)
         if scheduleid in self.queueids:
             return False
@@ -605,10 +638,16 @@ class schedule:
             self.newRunning(self.scheduleid)
             # Start the backup here 
             if self.backuptype == 'rsync':
+                output = 'sbklog|running|' + self.scheduleid + '|rsync'
+                self.writeLog(output)
                 success = self.performRsync()
             elif self.backuptype == 'dbdump':
+                output = 'sbklog|running|' + self.scheduleid + '|dbdump'
+                self.writeLog(output)
                 success = self.performDbdump()
             elif self.backuptype == 'archive':
+                output = 'sbklog|running|' + self.scheduleid + '|archive'
+                self.writeLog(output)
                 success = self.performArchive()
             else:
                 output = 'sbklog|error|' + self.scheduleid + '|unknown_backup_type=' + self.backuptype
@@ -665,6 +704,8 @@ class schedule:
             for line in output:
                 print str(line).strip()
         log = ""
+        if len(str(self.day)) == 1:
+            self.day = '0' + str(self.day)
         if len(str(self.minutes)) == 1:
             self.minutes = '0' + str(self.minutes)
         try:
@@ -812,6 +853,10 @@ class schedule:
                 errors = 'sbklog|error|command returned a non-zero exit status'
                 self.writeLog(errors)
                 #raise Exception(errors)
+            output = 'rm -f' + tarfile
+            self.writeLog(output)
+            output = srv.execute('rm -f ' + tarfile)
+            self.writeLog(output)
             srv.close()
         except Exception, e:
             if output:
